@@ -1,0 +1,73 @@
+version: '3.4'
+services:
+  backend:
+    build: ./legalhold-backend
+    image: legalhold-backend:tests
+    environment:
+      - PROFILES=uiTest
+      - POSTGRES_URL=postgresql
+      - ELASTIC_URL=elastic
+      - REDIS_URL=redis
+      - HOST_URL=backend
+    depends_on:
+      - redis
+      - elastic
+      - postgresql
+      - rabbitmq
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      - "RABBITMQ_DEFAULT_USER: guest"
+      - "RABBITMQ_DEFAULT_PASS: guest"
+    ports:
+      - 5672:5672
+      - 15672:15672
+
+  redis:
+    image: redis:5.0.3-alpine
+
+  postgresql:
+    image: postgres:9.5-alpine
+    environment:
+      - "max_connections=200"
+      - "POSTGRES_PASSWORD=postgres"
+
+  elastic:
+    image: elasticsearch:6.5.3
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms384m -Xmx384m
+
+  frontend:
+    build: ./legalhold-front
+    image: legalhold-front:tests
+    environment:
+      - BACKEND_HOST=http://backend:8081
+    depends_on: 
+      - backend
+
+  selenoid:
+    image: "aerokube/selenoid"
+    volumes:
+      - "$PWD/legalhold_acceptance_tests/selenoid:/etc/selenoid/:ro" # assumed current dir contains browsers.json
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    command: ["-container-network", "legalhold_default", "-service-startup-timeout", "3m", "-session-attempt-timeout", "3m"]
+
+  acceptance_tests:
+    environment:
+      - SELENIUM_IP=selenoid
+      - APP_URL=frontend
+      - POSTGRES_URL=postgresql
+      - ELASTIC_URL=elastic
+    depends_on:
+      - selenoid
+      - frontend
+    image: openjdk:8-jdk-alpine
+    volumes:
+      - "./:/code"
+    working_dir: /code/legalhold_acceptance_tests
+    command: 
+      sh -c "timeout -t 300 sh -c '
+        until nc -z backend 8081; do sleep 1; done' 
+      && ls -l && /code/legalhold_acceptance_tests/gradlew -Dorg.gradle.daemon=false uiTest"  
